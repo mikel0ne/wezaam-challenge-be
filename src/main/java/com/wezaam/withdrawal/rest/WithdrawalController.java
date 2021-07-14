@@ -2,22 +2,20 @@ package com.wezaam.withdrawal.rest;
 
 import com.wezaam.withdrawal.model.Withdrawal;
 import com.wezaam.withdrawal.model.WithdrawalScheduled;
-import com.wezaam.withdrawal.model.WithdrawalStatus;
+import com.wezaam.withdrawal.model.WithdrawalTemplate;
 import com.wezaam.withdrawal.repository.PaymentMethodRepository;
 import com.wezaam.withdrawal.repository.WithdrawalRepository;
 import com.wezaam.withdrawal.repository.WithdrawalScheduledRepository;
 import com.wezaam.withdrawal.service.WithdrawalService;
 import io.swagger.annotations.Api;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-
-import javax.servlet.http.HttpServletRequest;
-import java.time.Instant;
+import org.springframework.web.server.ResponseStatusException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,62 +24,48 @@ import java.util.List;
 public class WithdrawalController {
 
     @Autowired
-    private ApplicationContext context;
-    @Autowired
     private UserController userController;
+    @Autowired
+    private WithdrawalService withdrawalService;
+    @Autowired
+    private WithdrawalRepository withdrawalRepository;
+    @Autowired
+    private WithdrawalScheduledRepository withdrawalScheduledRepository;
+    @Autowired
+    private PaymentMethodRepository paymentMethodRepository;
 
-    @PostMapping("/create-withdrawals")
-    public ResponseEntity create(HttpServletRequest request) {
-        String userId = request.getParameter("userId");
-        String paymentMethodId = request.getParameter("paymentMethodId");
-        String amount = request.getParameter("amount");
-        String executeAt = request.getParameter("executeAt");
+    @PostMapping("/withdrawals")
+    @ResponseStatus(HttpStatus.CREATED)
+    public WithdrawalTemplate create(@RequestParam String userId, @RequestParam String paymentMethodId,
+    		@RequestParam String amount, @RequestParam String executeAt) {
         if (userId == null || paymentMethodId == null || amount == null || executeAt == null) {
-            return new ResponseEntity("Required params are missing", HttpStatus.BAD_REQUEST);
+        	throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Required params are missing");
         }
-        try {
-            userController.findById(Long.parseLong(userId));
-        } catch (Exception e) {
-            return new ResponseEntity("User not found", HttpStatus.NOT_FOUND);
-        }
-        if (!context.getBean(PaymentMethodRepository.class).findById(Long.parseLong(paymentMethodId)).isPresent()) {
-            return new ResponseEntity("Payment method not found", HttpStatus.NOT_FOUND);
+        userController.findById(Long.parseLong(userId));
+        if (!paymentMethodRepository.findById(Long.parseLong(paymentMethodId)).orElseThrow(
+        		() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Payment method not found"))
+        		.getUser().getId().toString().equals(userId)) {
+        	throw new ResponseStatusException(HttpStatus.CONFLICT, "Payment method does not belong to the user");
         }
 
-        WithdrawalService withdrawalService = context.getBean(WithdrawalService.class);
-        Object body;
+        WithdrawalTemplate withdrawal;
         if (executeAt.equals("ASAP")) {
-            Withdrawal withdrawal = new Withdrawal();
-            withdrawal.setUserId(Long.parseLong(userId));
-            withdrawal.setPaymentMethodId(Long.parseLong(paymentMethodId));
-            withdrawal.setAmount(Double.parseDouble(amount));
-            withdrawal.setCreatedAt(Instant.now());
-            withdrawal.setStatus(WithdrawalStatus.PENDING);
-            withdrawalService.create(withdrawal);
-            body = withdrawal;
+            withdrawal = withdrawalService.create(userId, paymentMethodId, amount);
         } else {
-            WithdrawalScheduled withdrawalScheduled = new WithdrawalScheduled();
-            withdrawalScheduled.setUserId(Long.parseLong(userId));
-            withdrawalScheduled.setPaymentMethodId(Long.parseLong(paymentMethodId));
-            withdrawalScheduled.setAmount(Double.parseDouble(amount));
-            withdrawalScheduled.setCreatedAt(Instant.now());
-            withdrawalScheduled.setExecuteAt(Instant.parse(executeAt));
-            withdrawalScheduled.setStatus(WithdrawalStatus.PENDING);
-            withdrawalService.schedule(withdrawalScheduled);
-            body = withdrawalScheduled;
+            withdrawal = withdrawalService.schedule(userId, paymentMethodId, amount, executeAt);
         }
 
-        return new ResponseEntity(body, HttpStatus.OK);
+        return withdrawal;
     }
 
-    @GetMapping("/find-all-withdrawals")
-    public ResponseEntity findAll() {
-        List<Withdrawal> withdrawals = context.getBean(WithdrawalRepository.class).findAll();
-        List<WithdrawalScheduled> withdrawalsScheduled = context.getBean(WithdrawalScheduledRepository.class).findAll();
-        List<Object> result = new ArrayList<>();
+    @GetMapping("/withdrawals")
+    public List<WithdrawalTemplate> findAll() {
+        List<Withdrawal> withdrawals = withdrawalRepository.findAll();
+        List<WithdrawalScheduled> withdrawalsScheduled = withdrawalScheduledRepository.findAll();
+        List<WithdrawalTemplate> result = new ArrayList<>();
         result.addAll(withdrawals);
         result.addAll(withdrawalsScheduled);
 
-        return new ResponseEntity(result, HttpStatus.OK);
+        return result;
     }
 }
